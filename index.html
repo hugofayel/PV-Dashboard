@@ -87,6 +87,9 @@
             padding: 8px 0; border-bottom: 1px solid var(--border);
         }
         .echance-date { font-weight: 600; }
+        .data-source {
+            font-size: 10px; color: #8B949E; margin-top: 4px;
+        }
     </style>
 </head>
 <body>
@@ -96,9 +99,10 @@
     <div class="header"><span class="emoji">☀️</span><h1>Mon Solaire Pro</h1></div>
     <div class="date" id="date-display"></div>
     <div class="card">
-        <h3>⚡ Production aujourd'hui (J-1)</h3>
+        <h3>⚡ Production hier (J-1)</h3>
         <span class="value" id="prod-today">--</span><span class="unit"> kWh</span>
         <p style="font-size:14px; color:var(--green); margin-top:4px;" id="revenu-today"></p>
+        <p class="data-source" id="data-source-today"></p>
     </div>
     <div class="grid-2">
         <div class="card"><h3>📅 Ce mois</h3><span class="value" id="prod-month">--</span><span class="unit"> kWh</span><p style="font-size:12px; color:var(--green);" id="revenu-month"></p></div>
@@ -179,12 +183,10 @@
         <p style="text-align:center;font-size:20px;font-weight:700;margin-top:8px" id="bilan-net"></p>
     </div>
 
-    <!-- NOUVELLE CARTE : Échéances d'emprunt (info seulement) -->
+    <!-- Échéances d'emprunt -->
     <div class="card">
         <h3>📅 Échéances d'emprunt (mémo)</h3>
-        <div id="echances-list">
-            <p style="color:#8B949E; text-align:center;">Aucune échéance enregistrée</p>
-        </div>
+        <div id="echances-list"><p style="color:#8B949E; text-align:center;">Aucune échéance à venir</p></div>
         <button class="btn btn-secondary" onclick="showAddEcheance()">+ Ajouter une échéance</button>
     </div>
 </div>
@@ -218,7 +220,6 @@
     </div>
 </div>
 
-<!-- Nouveau modal pour échéance -->
 <div class="modal-overlay" id="modal-echeance">
     <div class="modal">
         <h3 style="margin-bottom:16px">Ajouter une échéance d'emprunt</h3>
@@ -240,14 +241,13 @@
 </nav>
 
 <script>
-// ==================== CONFIGURATION (À COMPLÉTER) ====================
+// ==================== CONFIGURATION ====================
+// ⚠️ REMPLACEZ ICI AVEC VOS VRAIS IDENTIFIANTS ENEDIS
 const CONFIG = {
-    tarifRachat: 0.1274,
-    // ⚠️ REMPLACER ICI AVEC VOS IDENTIFIANTS ENEDIS
+    tarifRachat: 0.1274,             // €/kWh
     enedisClientId: 'xfz3YCUqFff2DxOQCrIWblhy8kwa',
     enedisClientSecret: '5rFXT85VuKVIWiy0Ks5dKKxSSVIa',
-    // ⚠️ VOTRE NUMÉRO DE PRM (14 chiffres)
-    prm: '50014258125191',
+    prm: '50014258125191',               // 14 chiffres
 };
 
 // ==================== DONNÉES LOCALES ====================
@@ -261,11 +261,16 @@ function setData(key, value) { localStorage.setItem(key, JSON.stringify(value));
 if (!getData('nettoyages')) setData('nettoyages', []);
 if (!getData('depenses')) setData('depenses', []);
 if (!getData('amortissements')) setData('amortissements', []);
-if (!getData('echeances')) setData('echeances', []); // ajout échéances
+if (!getData('echeances')) setData('echeances', []);
 if (!getData('objectifAnnuel')) {
     const obj = prompt('Quel est votre objectif annuel de production (en kWh) ?', '10000');
     setData('objectifAnnuel', parseFloat(obj) || 10000);
 }
+
+// Variables globales pour stocker les données de production
+window._prodYear = 0;
+window._prodMonth = 0;
+window._prodToday = 0;
 
 // ==================== NAVIGATION ====================
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -295,32 +300,11 @@ function updateDate() {
     document.getElementById('date-display').textContent = now.toLocaleDateString('fr-FR', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
 }
 
-// ==================== DASHBOARD ====================
-async function refreshDashboard() {
-    updateDate();
-    const prodToday = 15.2;   // exemple
-    const prodMonth = 320.5;
-    const prodYear = 4500;
-    const objectif = getData('objectifAnnuel');
-
-    document.getElementById('prod-today').textContent = prodToday.toFixed(1);
-    document.getElementById('revenu-today').textContent = `💰 ${(prodToday * CONFIG.tarifRachat).toFixed(2)} €`;
-    document.getElementById('prod-month').textContent = prodMonth.toFixed(0);
-    document.getElementById('revenu-month').textContent = `${(prodMonth * CONFIG.tarifRachat).toFixed(2)} €`;
-    document.getElementById('prod-year').textContent = prodYear.toFixed(0);
-
-    const progress = Math.min((prodYear / objectif) * 100, 100);
-    document.getElementById('progress-fill').style.width = `${progress}%`;
-    document.getElementById('progress-current').textContent = `${prodYear} kWh`;
-    document.getElementById('progress-target').textContent = `${objectif} kWh`;
-    document.getElementById('progress-percent').textContent = `${progress.toFixed(1)}%`;
-
-    updateNettoyageInfo();
-}
-
-// ==================== API ENEDIS (à activer) ====================
+// ==================== API ENEDIS ====================
 async function getEnedisToken() {
-    if (!CONFIG.enedisClientId || !CONFIG.enedisSecret) throw new Error('Identifiants Enedis manquants');
+    if (!CONFIG.enedisClientId || CONFIG.enedisClientId === 'VOTRE_CLIENT_ID') {
+        throw new Error('Identifiants Enedis non configurés');
+    }
     const response = await fetch('https://gw.hml.api.enedis.fr/v1/oauth2/token', {
         method: 'POST',
         headers: {
@@ -329,7 +313,10 @@ async function getEnedisToken() {
         },
         body: 'grant_type=client_credentials'
     });
-    if (!response.ok) throw new Error('Erreur authentification Enedis');
+    if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Erreur ${response.status}: ${err}`);
+    }
     const data = await response.json();
     return data.access_token;
 }
@@ -339,13 +326,88 @@ async function fetchProductionQuotidienne(dateDebut, dateFin) {
     const prm = CONFIG.prm;
     const url = `https://gw.hml.api.enedis.fr/v1/mesures_synchrone?usage_point_id=${prm}&date_debut=${dateDebut}&date_fin=${dateFin}&granularite=JOUR&type_mesure=INJECTION`;
     const response = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (!response.ok) throw new Error('Erreur API mesure_synchrone');
+    if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Erreur API mesure_synchrone: ${response.status} ${err}`);
+    }
     return response.json();
+}
+
+// Extraction des valeurs
+function extraireValeur(data) {
+    try {
+        return data?.meter_reading?.interval_reading?.[0]?.value || 0;
+    } catch(e) {
+        return 0;
+    }
+}
+
+function extraireSomme(data) {
+    try {
+        const mesures = data?.meter_reading?.interval_reading || [];
+        return mesures.reduce((sum, m) => sum + parseFloat(m.value || 0), 0);
+    } catch(e) {
+        return 0;
+    }
+}
+
+// ==================== DASHBOARD (données réelles) ====================
+async function refreshDashboard() {
+    updateDate();
+    
+    try {
+        const aujourdhui = new Date();
+        const hier = new Date(aujourdhui);
+        hier.setDate(hier.getDate() - 1);
+        
+        const dateHier = hier.toISOString().split('T')[0];
+        const debutMois = new Date(aujourdhui.getFullYear(), aujourdhui.getMonth(), 1).toISOString().split('T')[0];
+        const debutAnnee = `${aujourdhui.getFullYear()}-01-01`;
+        const aujourdhuiStr = aujourdhui.toISOString().split('T')[0];
+        
+        // Appels API (le mois et l'année peuvent être lourds, on les fait en parallèle)
+        const [dataHier, dataMois, dataAnnee] = await Promise.all([
+            fetchProductionQuotidienne(dateHier, dateHier),
+            fetchProductionQuotidienne(debutMois, aujourdhuiStr),
+            fetchProductionQuotidienne(debutAnnee, aujourdhuiStr)
+        ]);
+        
+        window._prodToday = extraireValeur(dataHier);
+        window._prodMonth = extraireSomme(dataMois);
+        window._prodYear = extraireSomme(dataAnnee);
+        
+        document.getElementById('data-source-today').textContent = 'Données réelles (API Enedis)';
+    } catch (error) {
+        console.error('Erreur API:', error);
+        document.getElementById('data-source-today').textContent = '⚠️ Données simulées (API indisponible)';
+        // Fallback valeurs simulées si l'API échoue
+        window._prodToday = window._prodToday || 0;
+        window._prodMonth = window._prodMonth || 0;
+        window._prodYear = window._prodYear || 0;
+    }
+    
+    const objectif = getData('objectifAnnuel');
+    
+    document.getElementById('prod-today').textContent = window._prodToday.toFixed(1);
+    document.getElementById('revenu-today').textContent = `💰 ${(window._prodToday * CONFIG.tarifRachat).toFixed(2)} €`;
+    document.getElementById('prod-month').textContent = window._prodMonth.toFixed(0);
+    document.getElementById('revenu-month').textContent = `${(window._prodMonth * CONFIG.tarifRachat).toFixed(2)} €`;
+    document.getElementById('prod-year').textContent = window._prodYear.toFixed(0);
+    
+    const progress = Math.min((window._prodYear / objectif) * 100, 100);
+    document.getElementById('progress-fill').style.width = `${progress}%`;
+    document.getElementById('progress-current').textContent = `${window._prodYear} kWh`;
+    document.getElementById('progress-target').textContent = `${objectif} kWh`;
+    document.getElementById('progress-percent').textContent = `${progress.toFixed(1)}%`;
+    
+    updateNettoyageInfo();
 }
 
 // ==================== PRODUCTION ====================
 let chartProduction, chartMonthly;
 function refreshProduction() {
+    // Les graphiques utiliseront les données de l'API (à implémenter)
+    // Pour l'instant, on garde des simulations
     const heures = ['6h','7h','8h','9h','10h','11h','12h','13h','14h','15h','16h','17h','18h','19h','20h'];
     const puissances = [0,0.2,1.5,3.2,4.8,5.5,5.8,5.6,5.2,4.5,3.0,1.8,0.5,0,0];
     const ctx1 = document.getElementById('chart-production').getContext('2d');
@@ -366,22 +428,25 @@ function refreshProduction() {
 // ==================== OBJECTIF ====================
 function refreshObjectif() {
     const objectif = getData('objectifAnnuel');
-    const produit = 4500;
+    const produit = window._prodYear || 0;
     document.getElementById('obj-target').textContent = objectif;
-    const progress = (produit/objectif)*100;
-    document.getElementById('obj-progress-fill').style.width = Math.min(progress,100)+'%';
-    document.getElementById('obj-percent').textContent = progress.toFixed(1)+'%';
+    const progress = Math.min((produit / objectif) * 100, 100);
+    document.getElementById('obj-progress-fill').style.width = progress + '%';
+    document.getElementById('obj-percent').textContent = progress.toFixed(1) + '%';
     document.getElementById('obj-produced').textContent = produit;
-    document.getElementById('obj-remaining').textContent = Math.max(0, objectif-produit);
-    const dayOfYear = Math.floor((new Date() - new Date(new Date().getFullYear(),0,0))/86400000);
-    const projection = (produit/dayOfYear)*365;
+    document.getElementById('obj-remaining').textContent = Math.max(0, objectif - produit);
+    
+    const now = new Date();
+    const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 0)) / 86400000);
+    const projection = dayOfYear > 0 ? (produit / dayOfYear) * 365 : 0;
     document.getElementById('obj-projection').textContent = Math.round(projection);
+    
     const status = document.getElementById('obj-projection-status');
     if (projection >= objectif) {
         status.textContent = '✅ En avance sur l\'objectif !';
         status.style.color = 'var(--green)';
     } else {
-        status.textContent = `⚠️ Retard de ${Math.round(objectif-projection)} kWh`;
+        status.textContent = `⚠️ Retard de ${Math.round(objectif - projection)} kWh`;
         status.style.color = 'var(--red)';
     }
 }
@@ -441,12 +506,13 @@ function getAllExpenses() {
 }
 
 function refreshFinances() {
-    const prodMonth = 320.5;
-    const prodYear = 4500;
+    const prodMonth = window._prodMonth || 0;
+    const prodYear = window._prodYear || 0;
     const tarif = CONFIG.tarifRachat;
+    
     document.getElementById('revenu-month-detail').textContent = (prodMonth*tarif).toFixed(2)+' €';
     document.getElementById('revenu-year-detail').textContent = (prodYear*tarif).toFixed(2)+' €';
-
+    
     const expenses = getAllExpenses();
     const tbody = document.getElementById('expense-table-body');
     if (expenses.length === 0) {
@@ -461,7 +527,7 @@ function refreshFinances() {
             </tr>
         `).join('');
     }
-
+    
     const totalRevenus = prodYear * tarif;
     const totalDepenses = expenses.reduce((sum,e)=>sum+e.montant, 0);
     document.getElementById('bilan-revenus').textContent = totalRevenus.toFixed(2)+' €';
@@ -470,18 +536,15 @@ function refreshFinances() {
     const bilan = document.getElementById('bilan-net');
     bilan.textContent = `Résultat net : ${net.toFixed(2)} €`;
     bilan.style.color = net >= 0 ? 'var(--green)' : 'var(--red)';
-
-    // Affichage des échéances
+    
     refreshEcheances();
 }
 
-// ==================== ÉCHÉANCES D'EMPRUNT (info seule) ====================
+// ==================== ÉCHÉANCES ====================
 function refreshEcheances() {
     const echeances = getData('echeances');
     const now = new Date();
-    // Trier par date
     echeances.sort((a,b) => new Date(a.date) - new Date(b.date));
-    // Ne garder que les échéances à venir (date >= aujourd'hui)
     const futures = echeances.filter(e => new Date(e.date) >= now.setHours(0,0,0,0));
     const container = document.getElementById('echances-list');
     if (futures.length === 0) {
@@ -492,7 +555,7 @@ function refreshEcheances() {
         <div class="echance-item">
             <div>
                 <span class="echance-date">${new Date(e.date).toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'})}</span>
-                <span style="margin-left: 8px; color: #8B949E;">${e.description}</span>
+                <span style="margin-left:8px; color:#8B949E;">${e.description}</span>
             </div>
             <span style="font-weight:600;">${e.montant.toFixed(2)} €</span>
         </div>
@@ -512,8 +575,9 @@ function addEcheance() {
     });
     setData('echeances', echeances);
     closeModal('modal-echeance');
-    refreshFinances(); // pour rafraîchir la liste
+    refreshFinances();
 }
+
 // ==================== MODALS ====================
 function showAddExpense() {
     document.getElementById('modal-expense').classList.add('show');
@@ -555,7 +619,7 @@ function closeModal(id) { document.getElementById(id).classList.remove('show'); 
 // ==================== INITIALISATION ====================
 function init() {
     refreshDashboard();
-    setInterval(refreshDashboard, 3600000);
+    setInterval(refreshDashboard, 3600000); // Rafraîchir toutes les heures
 }
 init();
 </script>
